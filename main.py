@@ -1,10 +1,11 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing import image
 import numpy as np
 import uvicorn
 import os
+from fastapi.middleware.cors import CORSMiddleware
 
 # Load model at startup
 MODEL_PATH = "data/cat_dog_classifier.keras"
@@ -14,15 +15,15 @@ app = FastAPI()
 
 
 # Load allowed origins from env var or fallback to default list
-# origins = os.getenv("FRONTEND_ORIGINS").split(",")
+origins = os.getenv("FRONTEND_ORIGINS").split(",")
 
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=["*"],
-#     allow_credentials=True,
-#     allow_methods=["GET"],  # only GET requests allowed
-#     allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "User-Agent", "X-Requested-With"],
-# )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["GET"],  # only GET requests allowed
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "User-Agent", "X-Requested-With"],
+)
 
 
 IMG_SIZE = (256, 256)
@@ -34,6 +35,10 @@ def read_root():
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
     try:
+        # Validate file is an image
+        if file.content_type not in ["image/jpeg", "image/png", "image/jpg"]:
+            raise HTTPException(status_code=400, detail="Invalid file type. Only JPEG and PNG images are allowed.")
+
         # Save the uploaded image temporarily
         contents = await file.read()
         temp_file_path = "temp_img.jpg"
@@ -57,5 +62,7 @@ async def predict(file: UploadFile = File(...)):
             "confidence": round(float(pred), 4)
         })
 
+    except HTTPException as he:
+        raise he
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
