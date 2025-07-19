@@ -1,15 +1,19 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
-from tensorflow.keras.models import load_model
+from fastapi.middleware.cors import CORSMiddleware
+from tensorflow.lite.python.interpreter import Interpreter
 from tensorflow.keras.preprocessing import image
 import numpy as np
-import uvicorn
+from io import BytesIO
 import os
-from fastapi.middleware.cors import CORSMiddleware
 
-# Load model at startup
-MODEL_PATH = "data/cat_dog_classifier.keras"
-model = load_model(MODEL_PATH)
+# Load TFLite model at startup
+MODEL_PATH = "./data/cat_dog_classifier.tflite"
+interpreter = Interpreter(model_path=MODEL_PATH)
+interpreter.allocate_tensors()
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
+
 
 app = FastAPI()
 
@@ -35,34 +39,24 @@ def read_root():
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
     try:
-        # Validate file is an image
         if file.content_type not in ["image/jpeg", "image/png", "image/jpg"]:
-            raise HTTPException(status_code=400, detail="Invalid file type. Only JPEG and PNG images are allowed.")
+            raise HTTPException(status_code=400, detail="Invalid file type. Only JPEG and PNG allowed.")
 
-        # Save the uploaded image temporarily
         contents = await file.read()
-        temp_file_path = "temp_img.jpg"
-        with open(temp_file_path, "wb") as f:
-            f.write(contents)
-
-        # Load and preprocess image
-        img = image.load_img(temp_file_path, target_size=IMG_SIZE)
+        img = image.load_img(BytesIO(contents), target_size=IMG_SIZE)
         img_array = image.img_to_array(img) / 255.0
-        img_array = np.expand_dims(img_array, axis=0)
+        img_array = np.expand_dims(img_array.astype(np.float32), axis=0)
 
-        # Predict
-        pred = model.predict(img_array)[0][0]
-        label = "Dog" if pred > 0.5 else "Cat"
+        interpreter.set_tensor(input_details[0]['index'], img_array)
+        interpreter.invoke()
+        prediction = interpreter.get_tensor(output_details[0]['index'])[0][0]
 
-        # Delete the temp file
-        os.remove(temp_file_path)
+        label = "Dog" if prediction > 0.5 else "Cat"
 
         return JSONResponse({
             "prediction": label,
-            "confidence": round(float(pred), 4)
+            "confidence": round(float(prediction), 4)
         })
 
-    except HTTPException as he:
-        raise he
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
